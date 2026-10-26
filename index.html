@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>El dilema del prisionero: juego en equipo</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔒</text></svg>">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&display=swap">
+<style>
+:root{--bg:#fff8e7;--ink:#2b2d42;--card:#ffffff;--t1:#d6e6ff;--t2:#fff0b8;--t3:#ffe0c7;--t4:#ffd6e0;--muted:#5c6475;--line:#2b2d42}
+@media (prefers-color-scheme:dark){:root{--bg:#1d1f33;--ink:#fff8e7;--card:#2b2d42;--t1:#29406b;--t2:#5b4a1a;--t3:#5d3a1e;--t4:#5c2a3a;--muted:#b8bfd0;--line:#fff8e7}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:'Fredoka',system-ui,sans-serif;font-size:18px;line-height:1.4}
+main{max-width:760px;margin:0 auto;padding:24px 16px 64px;display:flex;flex-direction:column;gap:20px}
+h1{font-size:34px;margin:0;line-height:1.1}
+h2{font-size:26px;margin:0 0 8px;line-height:1.15}
+p{margin:0 0 10px}
+.sub{color:var(--muted);margin:4px 0 0}
+.card{background:var(--card);border:3px solid var(--line);border-radius:24px;padding:22px}
+.big{font-size:22px;font-weight:600}
+.err{background:var(--t4);border:3px solid var(--line);border-radius:16px;padding:10px 14px}
+input{width:100%;font:inherit;font-size:20px;padding:12px 14px;border-radius:14px;border:3px solid var(--line);background:var(--bg);color:var(--ink);margin:6px 0 14px}
+button{font:inherit;cursor:pointer;color:var(--ink)}
+.go{width:100%;font-size:21px;font-weight:700;padding:14px;border-radius:16px;border:3px solid #2b2d42;background:#ff8c42;color:#2b2d42;margin-bottom:10px}
+.go.alt{background:var(--t1);color:var(--ink);border-color:var(--line)}
+.go:disabled{opacity:.45;cursor:not-allowed}
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:14px 0}
+.opt{display:flex;flex-direction:column;align-items:center;gap:4px;padding:18px 10px;border-radius:20px;border:3px solid var(--line);background:var(--t1);text-align:center}
+.opt+.opt{background:var(--t4)}
+.opt .em{font-size:48px}
+.opt b{font-size:24px}
+.opt small{font-size:16px;color:var(--muted)}
+.opt.sel{outline:6px solid #ff8c42;outline-offset:2px}
+.rules{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;font-size:16px}
+.rules div{border:2px solid var(--line);border-radius:14px;padding:8px 10px;background:var(--t2)}
+.pair{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;border:3px solid var(--line);border-radius:20px;padding:14px;background:var(--card)}
+.who{display:flex;flex-direction:column;gap:2px;text-align:center;word-break:break-word}
+.who b{font-size:20px}.who em{font-style:normal;font-weight:700}
+.vs{font-weight:700;color:var(--muted)}
+.list{display:flex;flex-direction:column;gap:12px}
+.mine{background:var(--t2)}
+.stats{background:var(--t1)}
+.admin{background:var(--t3)}
+@media (max-width:520px){.opts{grid-template-columns:1fr}.rules{grid-template-columns:1fr}.pair{grid-template-columns:1fr}.vs{text-align:center}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+<main>
+<header><h1>🔒 El dilema del prisionero</h1><p class="sub">Juego en equipo: pareja secreta, decisión secreta.</p></header>
+<div id="app"><div class="card"><p>Cargando…</p></div></div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const card=(h,c)=>'<div class="card '+(c||'')+'">'+h+'</div>';
+const yrs=n=>n===0?'¡Libre! 🎉':n+(n===1?' año':' años');
+const lab=c=>c==='traicionar'?'🗣️ Traicionó':'🤐 Calló';
+const res=(a,b)=>a==='callar'&&b==='callar'?[1,1]:a==='callar'?[10,0]:b==='callar'?[0,10]:[5,5];
+const ls={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+const HOST='host';
+const params=new URLSearchParams(location.search);
+const baseUrl=location.href.split('?')[0].split('#')[0];
+let mode=null,peer=null,conn=null,conns={},S=null,view=null,code='',draft='',cdraft='',pick=null,err='',status='',copied=false,retrying=false;
+let uid=ls.get('dilema_uid');
+if(!uid){uid='u'+Math.random().toString(36).slice(2,10)+Date.now().toString(36);ls.set('dilema_uid',uid);}
+const newState=()=>({phase:'lobby',round:0,players:{},pairs:[]});
+const genCode=()=>{const a='abcdefghjkmnpqrstuvwxyz23456789';let s='';for(let i=0;i<6;i++)s+=a[Math.floor(Math.random()*a.length)];return s};
+const save=()=>ls.set('dilema_state',JSON.stringify(S));
+
+/* ---------- lógica del facilitador (host) ---------- */
+function computeRes(u){
+  const ch=id=>{const p=S.players[id];return p&&p.choice?p.choice:'callar'};
+  const nm=id=>S.players[id]?S.players[id].name:'?';
+  let real=0,bs=0,trai=0,tot=0,mine=null;
+  const rows=S.pairs.map(p=>{
+    const ca=ch(p.a),cb=p.b?ch(p.b):(p.botChoice||'callar'),r=res(ca,cb);
+    real+=r[0];bs++;tot++;if(ca==='traicionar')trai++;
+    if(p.b){real+=r[1];bs++;tot++;if(cb==='traicionar')trai++;}
+    const row={na:nm(p.a),nb:p.b?nm(p.b):'🤖 Jugador sorpresa',ca:ca,cb:cb,ya:r[0],yb:r[1],bot:!p.b};
+    if(p.a===u)mine={mc:ca,oc:cb,y:r[0],on:row.nb};
+    if(p.b===u)mine={mc:cb,oc:ca,y:r[1],on:row.na};
+    return row;
+  });
+  return {rows:rows,trai:trai,tot:tot,real:real,base:bs,mine:mine};
+}
+function viewFor(u){
+  const ids=Object.keys(S.players),p=S.players[u];
+  const v={phase:S.phase,round:S.round,joined:!!p,name:p?p.name:null,count:ids.length,
+    decided:ids.filter(k=>S.players[k].choice).length,chosen:p?!!p.choice:false,
+    paired:S.pairs.some(r=>r.a===u||r.b===u)};
+  if(S.phase==='reveal')v.res=computeRes(u);
+  return v;
+}
+function sendView(u){const c=conns[u];if(c&&c.open){try{c.send({t:'view',v:viewFor(u)})}catch(e){}}}
+function broadcast(){Object.keys(conns).forEach(sendView);render();}
+function onMsg(u,m){
+  if(!S||!u)return;
+  if(m.t==='join'&&S.phase==='lobby'){
+    const n=String(m.name||'').trim().slice(0,30);
+    if(n)S.players[u]={name:n,choice:null};
+  }else if(m.t==='choose'&&S.phase==='play'){
+    const p=S.players[u];
+    if(p&&!p.choice&&S.pairs.some(r=>r.a===u||r.b===u)&&(m.v==='callar'||m.v==='traicionar'))p.choice=m.v;
+  }
+  save();broadcast();
+}
+function hostAct(a){
+  if(a==='start'){
+    const ids=Object.keys(S.players);if(ids.length<2)return;
+    for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));const t=ids[i];ids[i]=ids[j];ids[j]=t;}
+    S.pairs=[];for(let i=0;i<ids.length;i+=2)S.pairs.push({a:ids[i],b:ids[i+1]||null,botChoice:null});
+    S.phase='play';
+  }else if(a==='reveal'){
+    S.pairs.forEach(p=>{if(!p.b)p.botChoice=Math.random()<0.5?'callar':'traicionar';});
+    S.phase='reveal';
+  }else if(a==='reset'){
+    const r=S.round+1;S=newState();S.round=r;pick=null;
+  }
+  save();broadcast();
+}
+function openPeer(tries){
+  try{if(peer)peer.destroy();}catch(e){}
+  peer=new Peer('dilema-'+code);
+  peer.on('open',()=>{status='';render();});
+  peer.on('connection',c=>{
+    c.on('data',m=>{
+      if(!m||!m.uid)return;
+      const u=String(m.uid).slice(0,40);conns[u]=c;
+      if(m.t==='hello'){sendView(u);return;}
+      onMsg(u,m);
+    });
+    c.on('close',()=>{Object.keys(conns).forEach(k=>{if(conns[k]===c)delete conns[k];});});
+  });
+  peer.on('error',e=>{
+    if(e.type==='unavailable-id'&&tries<8){status='Recuperando la sala…';render();setTimeout(()=>openPeer(tries+1),2500);}
+    else{err='No se pudo crear la sala ('+e.type+'). Revisa tu conexión o recarga la página.';status='';render();}
+  });
+}
+function startHost(fresh){
+  mode='host';
+  if(fresh||!ls.get('dilema_code')){code=genCode();ls.set('dilema_code',code);S=newState();}
+  else{code=ls.get('dilema_code');try{S=JSON.parse(ls.get('dilema_state'))||newState();}catch(e){S=newState();}}
+  save();status='Creando la sala…';render();openPeer(0);
+}
+
+/* ---------- jugador invitado ---------- */
+function retry(){
+  if(retrying)return;retrying=true;
+  try{if(peer)peer.destroy();}catch(e){}
+  setTimeout(()=>startGuest(code),4000);
+}
+function startGuest(c0){
+  mode='guest';code=c0;retrying=false;
+  status=view?'Reconectando…':'Conectando a la sala…';render();
+  peer=new Peer();
+  peer.on('open',()=>{
+    conn=peer.connect('dilema-'+code,{reliable:true});
+    conn.on('open',()=>{status='';conn.send({t:'hello',uid:uid});render();});
+    conn.on('data',m=>{if(m&&m.t==='view'){view=m.v;status='';render();}});
+    conn.on('close',()=>{status='Se perdió la conexión. Reconectando…';render();retry();});
+  });
+  peer.on('error',e=>{
+    status=e.type==='peer-unavailable'?'No encuentro la sala. Revisa que el facilitador tenga la página abierta. Sigo intentando…':'Problema de conexión. Sigo intentando…';
+    render();retry();
+  });
+}
+function toHost(m){
+  if(mode==='host')onMsg(HOST,m);
+  else if(conn&&conn.open)conn.send(Object.assign({uid:uid},m));
+  else{err='Sin conexión con la sala. Espera un momento e intenta de nuevo.';render();}
+}
+
+/* ---------- vistas ---------- */
+function joinCard(){
+  return card('<h2>¡Bienvenido/a! 👋</h2><p>Tú y otra persona del equipo fueron arrestadas. Están en celdas separadas y nadie sabe quién es su pareja.</p><p>Escribe tu nombre para entrar:</p><input id="nm" maxlength="30" placeholder="Tu nombre" value="'+esc(draft)+'" autocomplete="off"><button class="go" data-act="join">Entrar al juego</button>');
+}
+function rulesHtml(){
+  return '<div class="rules"><div>🤐🤐 Los dos callan: <b>1 año</b> cada uno</div><div>🗣️🤐 Tú traicionas y tu pareja calla: <b>tú libre</b>, tu pareja 10 años</div><div>🤐🗣️ Tú callas y tu pareja traiciona: <b>10 años para ti</b>, tu pareja libre</div><div>🗣️🗣️ Los dos traicionan: <b>5 años</b> cada uno</div></div>';
+}
+function chooseHtml(){
+  return card('<h2>Tu decisión 🤔</h2><p>Tu pareja es secreta y también está decidiendo ahora. ¿Qué eliges?</p><div class="opts"><button class="opt'+(pick==='callar'?' sel':'')+'" data-act="pick" data-v="callar"><span class="em">🤐</span><b>Callar</b><small>Cooperas con tu pareja</small></button><button class="opt'+(pick==='traicionar'?' sel':'')+'" data-act="pick" data-v="traicionar"><span class="em">🗣️</span><b>Traicionar</b><small>Culpas a tu pareja</small></button></div><button class="go" data-act="confirm"'+(pick?'':' disabled')+'>Confirmar decisión</button>'+rulesHtml());
+}
+function revealHtml(r){
+  let h='';
+  if(r.mine)h+=card('<h2>Tu resultado</h2><p>Tú elegiste: <b>'+lab(r.mine.mc)+'</b></p><p>Tu pareja era <b>'+esc(r.mine.on)+'</b> y eligió: <b>'+lab(r.mine.oc)+'</b></p><p class="big">Te tocan: '+yrs(r.mine.y)+'</p>','mine');
+  const pct=r.tot?Math.round(r.trai*100/r.tot):0;
+  const msg=r.real>r.base?'Por pensar cada uno en sí mismo, el equipo sumó '+(r.real-r.base)+' años de cárcel de más 😅':'¡Gran cooperación! El equipo se acercó al mejor resultado posible 🎉';
+  h+=card('<h2>Resultado del equipo</h2><p>🗣️ Traicionaron: <b>'+r.trai+' de '+r.tot+'</b> ('+pct+'%)</p><p>⛓️ Años de cárcel del equipo: <b>'+r.real+'</b></p><p>🤝 Si todos hubieran callado: <b>'+r.base+'</b></p><p class="big">'+msg+'</p>','stats');
+  h+='<h2 style="margin:6px 0 0">Todas las parejas</h2><div class="list">'+r.rows.map(x=>'<div class="pair"><div class="who"><b>'+esc(x.na)+'</b><span>'+lab(x.ca)+'</span><em>'+yrs(x.ya)+'</em></div><div class="vs">VS</div><div class="who"><b>'+esc(x.nb)+'</b><span>'+lab(x.cb)+'</span><em>'+(x.bot?'':yrs(x.yb))+'</em></div></div>').join('')+'</div>';
+  return h;
+}
+function playerHtml(v){
+  if(v.phase==='lobby'){
+    return v.joined?card('<h2>¡Listo, '+esc(v.name)+'! ✅</h2><p>Ya estás dentro. Cuando todos hayan entrado, el facilitador formará las parejas en secreto.</p><p class="big">👥 '+v.count+(v.count===1?' persona':' personas')+' en el juego</p>'):joinCard();
+  }
+  if(!v.joined)return card('<h2>El juego ya empezó ⏳</h2><p>Espera la siguiente ronda: la pantalla de entrada aparecerá sola.</p>');
+  if(v.phase==='play'){
+    if(!v.paired)return card('<h2>Llegaste justo tarde ⏳</h2><p>No alcanzaste pareja en esta ronda. Espera la siguiente.</p>');
+    if(v.chosen)return card('<h2>Decisión enviada 🔐</h2><p>Tu elección es secreta. Esperando a que todos decidan…</p><p class="big">'+v.decided+' de '+v.count+' ya decidieron</p>');
+    return chooseHtml();
+  }
+  return revealHtml(v.res);
+}
+function adminHtml(){
+  const n=Object.keys(S.players).length,dec=Object.keys(S.players).filter(k=>S.players[k].choice).length;
+  let h='<h2>🎛️ Panel del facilitador</h2><p>Comparte este link con tu equipo y <b>mantén esta pestaña abierta</b> durante el juego:</p><input readonly value="'+esc(baseUrl+'?sala='+code)+'" onclick="this.select()"><button class="go alt" data-act="copy">'+(copied?'✅ Copiado':'📋 Copiar link')+'</button>';
+  if(S.phase==='lobby'){
+    h+='<p>Jugadores dentro: <b>'+n+'</b>. Habrá '+Math.floor(n/2)+' pareja(s)'+(n%2?' y una persona jugará contra un jugador sorpresa (la computadora)':'')+'. Tú también puedes jugar escribiendo tu nombre arriba.</p><button class="go" data-act="start"'+(n<2?' disabled':'')+'>🎲 Emparejar y empezar</button>';
+  }else if(S.phase==='play'){
+    h+='<p>Ya decidieron: <b>'+dec+' de '+n+'</b>. Quien no haya decidido contará como “Callar”.</p><button class="go" data-act="reveal">👀 Revelar resultados</button>';
+  }else{
+    h+='<p>Resultados revelados.</p>';
+  }
+  h+='<button class="go alt" data-act="reset">🔄 '+(S.phase==='reveal'?'Nueva ronda':'Reiniciar juego')+'</button><button class="go alt" data-act="newroom">🗑️ Crear una sala nueva (cambia el link)</button>';
+  return card(h,'admin');
+}
+function landing(){
+  const saved=ls.get('dilema_code');
+  return card('<h2>¿Cómo quieres entrar?</h2><button class="go" data-act="create">🎛️ Soy el facilitador: crear sala</button>'+(saved?'<button class="go alt" data-act="continue">↩️ Continuar mi sala anterior ('+esc(saved)+')</button>':'')+'<p style="margin-top:14px">¿Tienes un código de sala?</p><input id="cd" placeholder="Código" value="'+esc(cdraft)+'" autocomplete="off"><button class="go alt" data-act="joincode">Entrar con código</button><p class="sub">Normalmente solo abres el link que te compartió el facilitador.</p>');
+}
+function render(){
+  let h=err?'<div class="err">'+esc(err)+'</div>':'';
+  if(!mode)h+=landing();
+  else if(mode==='host')h+=(status?card('<p>'+esc(status)+'</p>'):'')+playerHtml(viewFor(HOST))+adminHtml();
+  else h+=(status?card('<p>'+esc(status)+'</p>'):'')+(view?playerHtml(view):'');
+  $('#app').innerHTML=h;
+}
+
+/* ---------- eventos ---------- */
+document.addEventListener('input',e=>{if(e.target.id==='nm')draft=e.target.value;if(e.target.id==='cd')cdraft=e.target.value;});
+document.addEventListener('keydown',e=>{if(e.key!=='Enter')return;if(e.target.id==='nm')act('join');if(e.target.id==='cd')act('joincode');});
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-act]');if(!b||b.disabled)return;
+  if(b.dataset.act==='pick'){pick=b.dataset.v;render();return;}
+  act(b.dataset.act);
+});
+function act(a){
+  err='';
+  if(a==='create')return startHost(true);
+  if(a==='continue')return startHost(false);
+  if(a==='joincode'){const c=cdraft.trim().toLowerCase().replace(/^dilema-/,'');if(!c){err='Escribe el código de sala.';return render();}return startGuest(c);}
+  if(a==='join'){const n=draft.trim().slice(0,30);if(!n){err='Escribe tu nombre para entrar.';return render();}return toHost({t:'join',name:n});}
+  if(a==='confirm'&&pick){const v=pick;pick=null;return toHost({t:'choose',v:v});}
+  if(a==='copy'){try{navigator.clipboard.writeText(baseUrl+'?sala='+code);copied=true;}catch(e){}return render();}
+  if(mode==='host'){
+    if(a==='newroom'){try{peer.destroy();}catch(e){}conns={};return startHost(true);}
+    hostAct(a);
+  }
+}
+if(params.get('sala'))startGuest(params.get('sala').trim().toLowerCase().replace(/^dilema-/,''));
+else render();
+</script>
+</body>
+</html>
